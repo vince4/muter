@@ -124,13 +124,21 @@ extension MuterConfiguration {
             guard let destinationIndex = indexOfArgument("-destination") else {
                 return arguments
             }
+            // The test selection of the configuration applies to every mutant. Failure diagnostics
+            // are never collected: a killed mutant is a failing test run, and collecting them takes
+            // minutes per run.
+            let testSelectionArguments = testCommandArguments.filter {
+                $0.hasPrefix("-only-testing:") || $0.hasPrefix("-skip-testing:")
+            }
             return [
                 "test-without-building",
                 testCommandArguments[destinationIndex],
                 testCommandArguments[destinationIndex + 1],
                 "-xctestrun",
-                testRunFile
-            ]
+                testRunFile,
+                "-collect-test-diagnostics",
+                "never"
+            ] + testSelectionArguments
         case .swift:
             return arguments + ["--skip-build"]
         case .unknown:

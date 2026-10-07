@@ -50,10 +50,53 @@ final class MutationTestingDelegateTests: MuterTestCase {
             "-destination",
             "platform=macOS,arch=x86_64,variant=Mac Catalyst",
             "-xctestrun",
-            "muter.xctestrun"
+            "muter.xctestrun",
+            "-collect-test-diagnostics",
+            "never"
         ])
 
         XCTAssertEqual(testProcess.executableURL?.path, "/tmp/xcodebuild")
+    }
+
+    func test_testProcessForXcodeBuildKeepsTheTestSelection() async throws {
+        current.process = MuterProcessFactory.makeProcess
+
+        let configuration = MuterConfiguration(
+            executable: "/tmp/xcodebuild",
+            arguments: [
+                "test",
+                "-scheme",
+                "App",
+                "-destination",
+                "platform=iOS Simulator,name=iPhone 17",
+                "-only-testing:AppTests/FeatureTests",
+                "-skip-testing:AppTests/FeatureTests/test_slow",
+                "SWIFT_TREAT_WARNINGS_AS_ERRORS=NO"
+            ]
+        )
+
+        let schemata = try MutationSchema.make(
+            filePath: "/path/fileName",
+            position: .init(line: 1)
+        )
+
+        let testProcess = try await sut.testProcess(
+            with: configuration,
+            schemata: schemata,
+            and: FileHandle(fileDescriptor: 0)
+        )
+
+        XCTAssertEqual(testProcess.arguments, [
+            "test-without-building",
+            "-destination",
+            "platform=iOS Simulator,name=iPhone 17",
+            "-xctestrun",
+            "muter.xctestrun",
+            "-collect-test-diagnostics",
+            "never",
+            "-only-testing:AppTests/FeatureTests",
+            "-skip-testing:AppTests/FeatureTests/test_slow"
+        ])
     }
 
     func test_testProcessForSwiftBuild() async throws {
