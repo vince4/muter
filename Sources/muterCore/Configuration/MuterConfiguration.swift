@@ -10,6 +10,9 @@ struct MuterConfiguration: Equatable, Codable {
     let excludeCallList: [String]
     let coverageThreshold: Double
     let testSuiteTimeout: Double?
+    /// Name of the runner test that tests every mutant in one launch (see InProcessMutationRunner).
+    /// xcodebuild only. Without it, the tests are launched once per mutant.
+    let inProcessRunner: String?
 
     var buildSystem: BuildSystem {
         guard let buildSystem = testCommandExecutable.components(separatedBy: "/").last?.trimmed else {
@@ -26,6 +29,7 @@ struct MuterConfiguration: Equatable, Codable {
         case excludeCallList = "excludeCalls"
         case coverageThreshold
         case testSuiteTimeout = "mutationTestTimeout"
+        case inProcessRunner
     }
 
     init(
@@ -34,7 +38,8 @@ struct MuterConfiguration: Equatable, Codable {
         excludeList: [String] = [],
         excludeCallList callList: [String] = [],
         coverageThreshold threshold: Double = 0,
-        testSuiteTimeOut timeout: Double? = nil
+        testSuiteTimeOut timeout: Double? = nil,
+        inProcessRunner runner: String? = nil
     ) {
         testCommandExecutable = executable
         testCommandArguments = arguments
@@ -42,6 +47,7 @@ struct MuterConfiguration: Equatable, Codable {
         excludeCallList = callList
         coverageThreshold = threshold
         testSuiteTimeout = timeout
+        inProcessRunner = runner
     }
 
     init(from decoder: Decoder) throws {
@@ -55,6 +61,7 @@ struct MuterConfiguration: Equatable, Codable {
         coverageThreshold = container.decode(Double.self, default: 0, forKey: .coverageThreshold)
         testSuiteTimeout = try container.decodeIfPresent(Double.self, forKey: .testSuiteTimeout)
             ?? (try container.decodeIfPresent(Int.self, forKey: .testSuiteTimeout)).flatMap(Double.init)
+        inProcessRunner = try container.decodeIfPresent(String.self, forKey: .inProcessRunner)
     }
 
     init(from data: Data) throws {
@@ -144,6 +151,36 @@ extension MuterConfiguration {
         case .unknown:
             return arguments
         }
+    }
+
+    /// The suites of each `-only-testing:<Target>/<Suite>` argument, by target.
+    var testSelectionByTarget: [String: [String]] {
+        testCommandArguments
+            .filter { $0.hasPrefix("-only-testing:") }
+            .reduce(into: [:]) { selection, argument in
+                let parts = argument.dropFirst("-only-testing:".count).split(separator: "/", maxSplits: 1)
+                guard parts.count == 2 else {
+                    return
+                }
+                selection[String(parts[0]), default: []].append(String(parts[1]))
+            }
+    }
+
+    /// The arguments that run only the in-process runner test, which then runs the selected suites itself.
+    func inProcessTestArguments(testRunFileName: String, runnerTest: String) -> [String] {
+        guard let destinationIndex = indexOfArgument("-destination") else {
+            return testCommandArguments
+        }
+        return [
+            "test-without-building",
+            testCommandArguments[destinationIndex],
+            testCommandArguments[destinationIndex + 1],
+            "-xctestrun",
+            testRunFileName,
+            "-collect-test-diagnostics",
+            "never",
+            "-only-testing:\(runnerTest)"
+        ]
     }
 
     private func indexOfArgument(_ arg: String) -> Int? {

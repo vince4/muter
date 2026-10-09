@@ -91,6 +91,11 @@ private extension PerformMutationTesting {
     }
 
     func testMutation(using state: AnyMutationTestState) async throws -> [MutationTestOutcome.Mutation] {
+        if let runnerName = state.muterConfiguration.inProcessRunner,
+           state.muterConfiguration.buildSystem == .xcodebuild {
+            return try await testMutationInProcess(using: state, runnerName: runnerName)
+        }
+
         var outcomes: [MutationTestOutcome.Mutation] = []
         outcomes.reserveCapacity(state.mutationPoints.count)
         var buildErrors = 0
@@ -154,6 +159,55 @@ private extension PerformMutationTesting {
         }
 
         return outcomes
+    }
+
+    func testMutationInProcess(
+        using state: AnyMutationTestState,
+        runnerName: String
+    ) async throws -> [MutationTestOutcome.Mutation] {
+        let schemata = state.mutationMapping.flatMap { $0.mutationSchemata }
+
+        // The test run file with no mutant switched on: the runner test switches them on itself.
+        try await ioDelegate.switchOn(
+            schemata: .null,
+            for: state.projectXCTestRun,
+            at: state.mutatedProjectDirectoryURL
+        )
+
+        let runner = InProcessMutationRunner(
+            configuration: state.muterConfiguration,
+            runnerName: runnerName,
+            testRunFileName: "muter.xctestrun",
+            workingDirectory: state.mutatedProjectDirectoryURL
+        )
+        let result = try await runner.run(mutantIdentifiers: schemata.map(\.id))
+
+        return schemata.map { mutationSchema in
+            let mutationPoint = MutationPoint(
+                mutationOperatorId: mutationSchema.mutationOperatorId,
+                filePath: mutationSchema.filePath,
+                position: mutationSchema.position
+            )
+            let outcome = MutationTestOutcome.Mutation(
+                testSuiteOutcome: result.outcomes[mutationSchema.id] ?? .buildError,
+                mutationPoint: mutationPoint,
+                mutationSnapshot: mutationSchema.snapshot,
+                originalProjectDirectoryUrl: state.projectDirectoryURL,
+                mutatedProjectDirectoryURL: state.mutatedProjectDirectoryURL
+            )
+
+            notificationCenter.post(name: .newMutationTestOutcomeAvailable, object: outcome)
+            notificationCenter.post(
+                name: .newTestLogAvailable,
+                object: MutationTestLog(
+                    mutationPoint: mutationPoint,
+                    testLog: result.logs[mutationSchema.id] ?? "",
+                    timePerBuildTestCycle: .none,
+                    remainingMutationPointsCount: .none
+                )
+            )
+            return outcome
+        }
     }
 
     func logFileName(
